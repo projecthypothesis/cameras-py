@@ -18,7 +18,7 @@ import folium
 
 def extract_coords(pdf_path: Path) -> pd.DataFrame:
     """Извлекает все пары широта‑долгота из PDF и возвращает DataFrame."""
-    pattern = re.compile(r'(\d{2}(?:[ ,]\d{3,6})+)\s+(\d{2,3}(?:[ ,]\d{3,6})+)')
+    pattern = re.compile(r'([3-4][0-9][.,][0-9]+)[ \t\r\n]+([6][0-9][.,][0-9]+)')
     coords = set()
 
     with pdfplumber.open(pdf_path) as pdf:
@@ -32,9 +32,88 @@ def extract_coords(pdf_path: Path) -> pd.DataFrame:
                 lat = float(raw_lat.replace(" ", "").replace(",", "."))
                 lon = float(raw_lon.replace(" ", "").replace(",", "."))
 
-                # фильтруем по реалистичным для Узбекистана диапазонам
-                if 38 <= lat <= 43 and 66 <= lon <= 74:
+                # фильтруем по реалистичным для Узбекистана диапазонам
+                if 38 <= lat <= 43 and 60 <= lon <= 74:
                     coords.add((round(lat, 6), round(lon, 6)))
+
+    df = pd.DataFrame(coords, columns=["lat", "lon"]).sort_values(["lat", "lon"])
+    return df
+
+
+def extract_coords_by_camera_numbers(pdf_path: Path) -> pd.DataFrame:
+    """Извлекает координаты из строк с номерами камер, используя более гибкий подход."""
+    coords = set()
+    
+    # Простой паттерн для поиска координат в конце строки
+    pattern = re.compile(r'([3-4][0-9][.,][0-9]+)[ ]+([6][0-9][.,][0-9]+)')
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if not text:
+                continue
+            
+            lines = text.split('\n')
+            for line in lines:
+                # Ищем строки, начинающиеся с 4-значного номера (камера)
+                if re.match(r'^[0-9]{4}', line.strip()):
+                    # Ищем координаты в строке
+                    matches = pattern.findall(line)
+                    for raw_lat, raw_lon in matches:
+                        try:
+                            lat = float(raw_lat.replace(",", "."))
+                            lon = float(raw_lon.replace(",", "."))
+                            
+                            # Фильтруем по реалистичным диапазонам
+                            if 38 <= lat <= 43 and 60 <= lon <= 74:
+                                coords.add((round(lat, 6), round(lon, 6)))
+                        except ValueError:
+                            continue
+
+    df = pd.DataFrame(coords, columns=["lat", "lon"]).sort_values(["lat", "lon"])
+    return df
+
+
+def extract_coords_combined(pdf_path: Path) -> pd.DataFrame:
+    """Комбинированный метод извлечения координат - использует оба подхода для максимального покрытия."""
+    coords = set()
+    
+    # Метод 1: Извлечение по номерам камер
+    pattern1 = re.compile(r'([3-4][0-9][.,][0-9]+)[ ]+([6][0-9][.,][0-9]+)')
+    
+    # Метод 2: Универсальное извлечение
+    pattern2 = re.compile(r'([3-4][0-9][.,][0-9]+)[ \t\r\n]+([6][0-9][.,][0-9]+)')
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if not text:
+                continue
+            
+            # Метод 1: По строкам с номерами камер
+            lines = text.split('\n')
+            for line in lines:
+                if re.match(r'^[0-9]{4}', line.strip()):
+                    matches = pattern1.findall(line)
+                    for raw_lat, raw_lon in matches:
+                        try:
+                            lat = float(raw_lat.replace(",", "."))
+                            lon = float(raw_lon.replace(",", "."))
+                            if 38 <= lat <= 43 and 60 <= lon <= 74:
+                                coords.add((round(lat, 6), round(lon, 6)))
+                        except ValueError:
+                            continue
+            
+            # Метод 2: Универсальное извлечение из всего текста
+            matches = pattern2.findall(text)
+            for raw_lat, raw_lon in matches:
+                try:
+                    lat = float(raw_lat.replace(",", "."))
+                    lon = float(raw_lon.replace(",", "."))
+                    if 38 <= lat <= 43 and 60 <= lon <= 74:
+                        coords.add((round(lat, 6), round(lon, 6)))
+                except ValueError:
+                    continue
 
     df = pd.DataFrame(coords, columns=["lat", "lon"]).sort_values(["lat", "lon"])
     return df
@@ -66,6 +145,7 @@ if __name__ == "__main__":
     if not pdf_path.exists():
         sys.exit(f"Файл {pdf_path} не найден")
 
-    df_coords = extract_coords(pdf_path)
+    # Используем новый метод извлечения по номерам камер
+    df_coords = extract_coords_combined(pdf_path)
     print(f"Найдено координат: {len(df_coords)}")
     make_map(df_coords) 
